@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Controle de Revisão de Veículos</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+            color: #1f2937;
+        }
+        [contenteditable="true"]:focus {
+            outline: 2px solid #3b82f6;
+            outline-offset: 2px;
+            border-radius: 0.5rem;
+        }
+    </style>
+</head>
+<body class="p-6">
+
+    <div class="bg-white rounded-lg shadow-lg p-6 max-w-5xl mx-auto">
+        <h1 class="text-3xl font-bold text-center mb-6" contenteditable="true">Controle de Revisão de Veículos</h1>
+        <p class="text-center text-gray-600 mb-2" contenteditable="true">
+            Preencha a quilometragem diária para monitorar o status de revisão dos veículos. Um alerta será exibido quando a revisão estiver a 150 km ou menos.
+        </p>
+        <p id="userIdDisplay" class="text-sm text-gray-400 text-center mb-6">Usuário: Carregando...</p>
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+                <thead>
+                    <tr class="bg-gray-100">
+                        <th class="py-3 px-4 border-b-2 font-medium text-gray-700 rounded-tl-lg" contenteditable="true">Veículo</th>
+                        <th class="py-3 px-4 border-b-2 font-medium text-gray-700" contenteditable="true">Matrícula</th>
+                        <th class="py-3 px-4 border-b-2 font-medium text-gray-700" contenteditable="true">Última Revisão (km)</th>
+                        <th class="py-3 px-4 border-b-2 font-medium text-gray-700" contenteditable="true">Próxima Revisão (km)</th>
+                        <th class="py-3 px-4 border-b-2 font-medium text-gray-700" contenteditable="true">Quilometragem Atual (km)</th>
+                        <th class="py-3 px-4 border-b-2 font-medium text-gray-700 rounded-tr-lg" contenteditable="true">Alerta</th>
+                    </tr>
+                </thead>
+                <tbody id="vehicleTableBody">
+                    <!-- Os dados da tabela serão populados pelo JavaScript a partir do Firestore. -->
+                </tbody>
+            </table>
+        </div>
+        <div class="flex justify-center mt-6">
+            <button id="addVehicleBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-full transition-colors duration-200 shadow-md">
+                Adicionar Novo Veículo
+            </button>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInWithCustomToken, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, collection, setDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Variáveis globais de ambiente fornecidas pelo sistema
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+        let db, auth, userId;
+
+        // Função de inicialização do Firebase e autenticação
+        const initFirebase = async () => {
+            try {
+                if (Object.keys(firebaseConfig).length > 0) {
+                    const app = initializeApp(firebaseConfig);
+                    auth = getAuth(app);
+                    db = getFirestore(app);
+
+                    if (initialAuthToken) {
+                        const userCredential = await signInWithCustomToken(auth, initialAuthToken);
+                        userId = userCredential.user.uid;
+                    } else {
+                        const userCredential = await signInAnonymously(auth);
+                        userId = userCredential.user.uid;
+                    }
+
+                    document.getElementById('userIdDisplay').textContent = `Usuário ID: ${userId}`;
+                    startRealtimeListener();
+                } else {
+                    console.error("Firebase config is missing.");
+                    document.getElementById('userIdDisplay').textContent = "Erro: Firebase não configurado.";
+                }
+            } catch (error) {
+                console.error("Erro ao inicializar Firebase ou autenticar:", error);
+                document.getElementById('userIdDisplay').textContent = "Erro de autenticação.";
+            }
+        };
+
+        // Função para iniciar o listener em tempo real no Firestore
+        const startRealtimeListener = () => {
+            const collectionPath = `/artifacts/${appId}/public/data/vehicles`;
+            const vehiclesCol = collection(db, collectionPath);
+            
+            // onSnapshot escuta em tempo real por mudanças na coleção
+            onSnapshot(vehiclesCol, (snapshot) => {
+                const vehicles = [];
+                snapshot.forEach(doc => {
+                    vehicles.push({ id: doc.id, ...doc.data() });
+                });
+                renderTable(vehicles);
+            });
+        };
+        
+        // Função para salvar os dados de um veículo no Firestore
+        async function saveVehicleData(vehicleId, data) {
+            if (!db) {
+                console.error("Banco de dados não está inicializado.");
+                return;
+            }
+            try {
+                const docRef = doc(db, `/artifacts/${appId}/public/data/vehicles/${vehicleId}`);
+                await setDoc(docRef, data, { merge: true });
+                console.log("Dados do veículo salvos com sucesso!");
+            } catch (error) {
+                console.error("Erro ao salvar dados do veículo:", error);
+            }
+        }
+
+        // Função para renderizar a tabela com os dados.
+        function renderTable(vehicles) {
+            const tableBody = document.getElementById('vehicleTableBody');
+            tableBody.innerHTML = ''; // Limpa a tabela antes de renderizar
+
+            vehicles.forEach((vehicle, index) => {
+                const kmUntilService = vehicle.nextServiceKm - vehicle.currentKm;
+                
+                let alertText = '';
+                let alertClass = '';
+                if (kmUntilService <= 150) {
+                    alertText = 'ATENÇÃO: Próximo da Revisão!';
+                    alertClass = 'bg-red-200 text-red-800 font-bold';
+                }
+
+                const row = document.createElement('tr');
+                row.className = 'hover:bg-gray-50 transition-colors duration-200';
+                
+                row.innerHTML = `
+                    <td class="py-3 px-4 border-b border-gray-200">
+                        <input type="text" value="${vehicle.vehicle || ''}" class="w-28 p-1 border-none focus:ring-0 focus:outline-none" onchange="updateVehicleData('${vehicle.id}', 'vehicle', this.value)">
+                    </td>
+                    <td class="py-3 px-4 border-b border-gray-200">
+                        <input type="text" value="${vehicle.plate || ''}" class="w-24 p-1 border-none focus:ring-0 focus:outline-none" onchange="updateVehicleData('${vehicle.id}', 'plate', this.value)">
+                    </td>
+                    <td class="py-3 px-4 border-b border-gray-200">
+                        <input type="number" value="${vehicle.lastServiceKm || 0}" class="w-32 p-1 border-none focus:ring-0 focus:outline-none" onchange="updateVehicleData('${vehicle.id}', 'lastServiceKm', this.value)">
+                    </td>
+                    <td class="py-3 px-4 border-b border-gray-200">
+                        <input type="number" value="${vehicle.nextServiceKm || 0}" class="w-32 p-1 border-none focus:ring-0 focus:outline-none" onchange="updateVehicleData('${vehicle.id}', 'nextServiceKm', this.value)">
+                    </td>
+                    <td class="py-3 px-4 border-b border-gray-200">
+                        <input type="number" value="${vehicle.currentKm || 0}" class="w-32 p-1 border-none focus:ring-0 focus:outline-none" onchange="updateVehicleData('${vehicle.id}', 'currentKm', this.value)">
+                    </td>
+                    <td class="py-3 px-4 border-b border-gray-200">
+                        <span class="inline-block px-3 py-1 rounded-full text-xs ${alertClass}">
+                            ${alertText}
+                        </span>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+        
+        // Define a função de atualização no escopo global para que possa ser acessada pelo onchange
+        window.updateVehicleData = (vehicleId, field, newValue) => {
+            const data = {};
+            // Converte valores numéricos para tipo Number
+            if (['lastServiceKm', 'nextServiceKm', 'currentKm'].includes(field)) {
+                data[field] = parseInt(newValue, 10);
+            } else {
+                data[field] = newValue;
+            }
+            saveVehicleData(vehicleId, data);
+        };
+        
+        // Adiciona um novo veículo com um ID único
+        document.getElementById('addVehicleBtn').addEventListener('click', () => {
+            const newVehicleId = `vehicle_${Date.now()}`;
+            const newVehicleData = {
+                vehicle: "Novo Veículo",
+                plate: "000-0000",
+                lastServiceKm: 0,
+                nextServiceKm: 10000,
+                currentKm: 0
+            };
+            saveVehicleData(newVehicleId, newVehicleData);
+        });
+
+        // Inicia a aplicação quando a página é carregada
+        document.addEventListener('DOMContentLoaded', initFirebase);
+    </script>
+</body>
+</html>
